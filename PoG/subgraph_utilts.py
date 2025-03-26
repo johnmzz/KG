@@ -19,6 +19,8 @@ import sqlite3
 import time
 import pickle
 
+# determines which LLM-predicted entities actually need to be explored further in the KG
+# filtering entities that are already present (or highly similar) in the KG while keeping truly new entities.
 def entity_need_explore(topic_entity,path_list, high_sub_entities):
     """从subgraph_data中根据高相似实体找到相关路径"""
     # 构建一个字典以存储每个实体的最大相似度
@@ -31,6 +33,7 @@ def entity_need_explore(topic_entity,path_list, high_sub_entities):
         entity_similarity[entity1] = max(entity_similarity[entity1], similarity)
         # entity_similarity[entity2] = max(entity_similarity[entity2], similarity)
 
+    # Sorts entities by similarity in descending order.
     need_to_find = []
     for entity, similarity in sorted(entity_similarity.items(), key=lambda x: x[1], reverse=True):
         # print(entity)
@@ -40,8 +43,14 @@ def entity_need_explore(topic_entity,path_list, high_sub_entities):
     return need_to_find
 
 def initialize_large_database(db_path):
+    # connect to the SQLite database file specified by db_path
     with sqlite3.connect(db_path) as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor()  # create cursor, which allows SQL commands to be withini the DB
+
+        # create a table named subgraphs
+        #   question_id: stores the ID of the question being processed
+        #   chunk_index: chunk number for large subgraph data is split into multiple pieces
+        #   data: stores the actual subgraph information in binary format
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS subgraphs (
             question_id TEXT,
@@ -50,7 +59,7 @@ def initialize_large_database(db_path):
             PRIMARY KEY (question_id, chunk_index)
         )
         ''')
-        conn.commit()
+        conn.commit()   # save the changes to the SQL DB
 
 def retry_operation(func):
     """Decorator to retry database operations."""
@@ -96,18 +105,25 @@ def save_to_large_db(db_path, question_id, data_dict, chunk_size=256 * 1024 * 10
             conn.commit()
         print("Data saved to database.")
         print(f"Time taken to save data: {time.time() - start} seconds.")
+
+# Retrieves and reconstructs stored data from an SQLite database based on a question_id
 @retry_operation
 def load_from_large_db(db_path, question_id):
-    with sqlite3.connect(db_path) as conn:
+    with sqlite3.connect(db_path) as conn:  # connect with DB
         start = time.time()
         cursor = conn.cursor()
+
+        # Retrieves the "data" column of records where "question_id" matches
         cursor.execute('SELECT data FROM subgraphs WHERE question_id = ? ORDER BY chunk_index', (question_id,))
+        
+        # Concatenates all retrieved data values into a single binary blob
         data_blob = b''.join(row[0] for row in cursor if row[0] is not None)
         
         if not data_blob:
             # print("No data found or data is empty.")
             return None
         
+        # Deserializes (unpickles) the binary blob back into its original Python object.
         try:
             result = pickle.loads(data_blob)
             return result
@@ -170,14 +186,15 @@ def calculate_cosine_similarity(list1, list2, value=0.5):
     """计算两个实体列表之间的余弦相似度"""
     if not list1 or not list2:
         return []
-    vectorizer = TfidfVectorizer()
-    all_entities = list(list1) + list(list2)
-    tfidf_matrix = vectorizer.fit_transform(all_entities)
+    vectorizer = TfidfVectorizer()  #Initialize TF-IDF vectorizer
+    all_entities = list(list1) + list(list2)    # Initialize TF-IDF vectorizer
+    tfidf_matrix = vectorizer.fit_transform(all_entities)   # Compute TF-IDF vectors
     
-    list1_vecs = tfidf_matrix[:len(list1)]
-    list2_vecs = tfidf_matrix[len(list1):]
-    cosine_sim = cosine_similarity(list1_vecs, list2_vecs)
+    list1_vecs = tfidf_matrix[:len(list1)]  # TF-IDF vectors for list1
+    list2_vecs = tfidf_matrix[len(list1):]  # TF-IDF vectors for list2
+    cosine_sim = cosine_similarity(list1_vecs, list2_vecs)  # Compute cosine similarity matrix
     
+    # find similar pairs
     similar_entities = []
     for i, entity1 in enumerate(list1):
         for j, entity2 in enumerate(list2):

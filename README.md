@@ -40,6 +40,11 @@ Use the following command to run the dataset for single-keyword questions:
 python PoG_single.py <Dataset_name> <sum/unsum> <beam_search:1, 12, 13, 123> <PoG/PoGE> <gpt3/gpt4> <max_depth 1/2/3>
 ```
 
+eg:
+```bash
+python PoG_single.py cwq sum 123 PoG gpt3 3
+```
+
 ### Arguments:
 - `<Dataset_name>`: The dataset to use. Options:
   - `webqsp`

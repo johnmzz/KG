@@ -20,6 +20,8 @@ def count_tokens(text, model="gpt-3.5-turbo"):
     encoding = tiktoken.encoding_for_model(model)
     return len(encoding.encode(text))
 
+# Interacts with either Google's Gemini API or OpenAI's GPT API to generate responses based on a given prompt
+# temperature controls randomness: lower values (0.1-0.4) more deterministic, higher values (0.7-1.0) more creative
 def run_LLM(prompt, model,temperature=0.4):
     result = ''
     if "google" in model:
@@ -62,12 +64,15 @@ def run_LLM(prompt, model,temperature=0.4):
         # model = "gpt-3.5-turbo"
         # model = "gpt-4-turbo"
         # model = "gpt-4o"
+
+        # create an OpenAI client for sending request
         client = OpenAI(
             # defaults to os.environ.get("OPENAI_API_KEY")
             api_key=openai_api_key,
             # base_url=openai_api_base,
         )
-    else:
+
+    else:   # self-hosted local LLM
         openai_api_base = "http://localhost:8000/v1"
         openai_api_key = "EMPTY"
         client = OpenAI(
@@ -75,22 +80,26 @@ def run_LLM(prompt, model,temperature=0.4):
             api_key=openai_api_key,
             base_url=openai_api_base,
         )
+    
+    # construct OpenAI message
     system_message = "You are an AI assistant that helps people find information."
-    messages = [{"role": "system", "content": system_message}]
-    message_prompt = {"role": "user", "content": prompt}
+    messages = [{"role": "system", "content": system_message}]      # system messsage: sets the AI's role
+    message_prompt = {"role": "user", "content": prompt}            # user prompt: contains the actual query
     messages.append(message_prompt)
+
+    # Sending OpenAI API Request: calls OpenAI's chat API, retries up to 3 times if an error occurs.
     try_time = 0
     while try_time<3:
         try:
             response = client.chat.completions.create(
-                model=model,
+                model=model,                # GPT-4 Turbo or GPT-3.5 Turbo
                 messages=messages,
                 temperature=temperature,
-                max_tokens=512,
-                frequency_penalty= 0,
-                presence_penalty=0
+                max_tokens=512,             # limits response length
+                frequency_penalty= 0,       # avoid repetition
+                presence_penalty=0          # no penalty for introducing new topics
             )
-            result = response.choices[0].message.content
+            result = response.choices[0].message.content    # extract the generated response
             break
         except Exception as e:
             error_message = str(e)
@@ -117,16 +126,19 @@ def prepare_dataset(dataset_name):
             datas = json.load(f)
         ID = 'ID'
         question_string = 'question'
+
     elif dataset_name == 'webqsp':
         with open('../data/WebQSP.json',encoding='utf-8') as f:
             datas = json.load(f)
         question_string = 'RawQuestion'
         ID = "QuestionId"
         # answer = ""
+
     elif dataset_name == 'webqsp_multi':
         with open('../data/webqsp_multi.json',encoding='utf-8') as f:
             datas = json.load(f)
         question_string = 'question'
+
     elif dataset_name == 'grailqa':
         with open('../data/grailqa.json',encoding='utf-8') as f:
             datas = json.load(f)
@@ -138,31 +150,39 @@ def prepare_dataset(dataset_name):
             datas = json.load(f)    
         question_string = 'question'
         ID = 'question'
+
     elif dataset_name == 'qald':
         with open('../data/qald_10-en.json',encoding='utf-8') as f:
             datas = json.load(f) 
         question_string = 'question'   
+
     elif dataset_name == 'webquestions':
         with open('../data/WebQuestions.json',encoding='utf-8') as f:
             datas = json.load(f)
         ID = 'question'
         question_string = 'question'
+
     elif dataset_name == 'trex':
         with open('../data/T-REX.json',encoding='utf-8') as f:
             datas = json.load(f)
-        question_string = 'input'    
+        question_string = 'input'  
+
     elif dataset_name == 'zeroshotre':
         with open('../data/Zero_Shot_RE.json',encoding='utf-8') as f:
             datas = json.load(f)
-        question_string = 'input'    
+        question_string = 'input'
+
     elif dataset_name == 'creak':
         with open('../data/creak.json',encoding='utf-8') as f:
             datas = json.load(f)
         question_string = 'sentence'
+
     else:
         print("dataset not found, you should pick from {cwq, webqsp, grailqa, simpleqa, qald, webquestions, trex, zeroshotre, creak}.")
         exit(-1)
     return datas, question_string, ID
+
+
 import time
 import concurrent.futures
 import time
@@ -248,7 +268,8 @@ def bfs_expand_one_hop(entity, graph_storage, is_head):
 
 from concurrent.futures import ThreadPoolExecutor
 
-
+# processes SPARQL query results by removing the Freebase namespace prefix (http://rdf.freebase.com/ns/) from entity IDs
+#   Returns a list of cleaned dictionaries.
 def replace_prefix1(data):
     if data is None:
         print("Warning: No data available to process in replace_prefix1.")
@@ -288,8 +309,13 @@ def search_relations_and_entities_combined(entity_id):
     """ % (entity_id, entity_id)
     results = execute_sparql(sparql_query)
     return replace_prefix1(results)
-# Ensure you have proper implementations for search_relations_and_entities_combined and are_entities_connected
+
+# Queries a Freebase knowledge graph (KG) using SPARQL to retrieve relationships and connected entities for a given entity.
+#   Returns a list of relations and connected entities.
+#   Ensure you have proper implementations for search_relations_and_entities_combined and are_entities_connected
 def search_relations_and_entities_combined_1(entity_id):
+
+    # Find all (head and tail) entries connected to "entity_id" and retrieve entity names (if english, if no name -> "Unnamed Entity")
     sparql_query = """
     PREFIX ns: <http://rdf.freebase.com/ns/>
     SELECT ?relation ?connectedEntity ?connectedEntityName ?direction
@@ -315,7 +341,22 @@ def search_relations_and_entities_combined_1(entity_id):
         }
     }
     """ % (entity_id, entity_id)
-    results = execute_sparql(sparql_query)
+    # eg. Query Entity: m.02jx3 "Germany"
+    #
+    # |       Relation	     | Connected Entity |    Name	 |  Direction |
+    # | "shares_border_with" |    "m.0f8l9c"	|  "France"  |	 "tail"   |
+    # | "located_in"	     |    "m.0g7qf"	    |  "Europe"  |	 "tail"   |
+    # | "shares_border_with" |    "m.0g7qf"	    |  "Belgium" |	 "head"   |
+
+    # Execute the SPARQL Query
+    results = execute_sparql(sparql_query)  # sends the query to a SPARQL endpoint, retrieves JSON results.
+
+    # eg. returns (after execute_sparql and replace_prefix1):
+    # [
+    #     { "relation": "shares_border_with", "connectedEntity": "m.0f8l9c", "connectedEntityName": "France", "direction": "tail" },
+    #     { "relation": "located_in", "connectedEntity": "m.0g7qf", "connectedEntityName": "Europe", "direction": "tail" }
+    # ]
+
     return replace_prefix1(results)
 
 def explore_graph_from_entities_by_hop_neighbor_1(entity_ids, max_depth=5,answer_name=[]):
@@ -674,8 +715,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
 import itertools
 
+# Merges paths from a starting entity and a target entity via an intersection node. 
+# It is used in bidirectional BFS to construct valid paths connecting two entities.
 def process_node(start_paths, goal_paths, node):
-    local_paths = []
+    # eg. 
+    # start_paths = {
+    #     "Europe": [["Germany", "Europe"]],
+    #     "France": [["Germany", "France"], ["Germany", "Europe", "France"]]
+    # }
+    # end_paths = {
+    #     "Europe": [["France", "Europe"]],
+    #     "Germany": [["France", "Germany"], ["France", "Europe", "Germany"]]
+    # }
+    # node = "Europe"
+
+    local_paths = []    # combined paths
+
     for f_path in start_paths[node]:
         for b_path in goal_paths[node]:
             # 确保 f_path 和 b_path 始终为列表
@@ -684,8 +739,8 @@ def process_node(start_paths, goal_paths, node):
             # local_paths.append(tuple(f_path))
             # local_paths.append(tuple(b_path))
             try:
-                if len(b_path) > 1:
-                    combined_path = f_path + b_path[::-1][1:]  # 确保 b_path 长度大于1
+                if len(b_path) > 1: # 确保 b_path 长度大于1
+                    combined_path = f_path + b_path[::-1][1:]  # reverse b_path, then remove the first node (common node)
                 else:
                     combined_path = f_path  # 如果 b_path 只有一个元素，只取 f_path
                 if len(combined_path)>1:
@@ -694,30 +749,57 @@ def process_node(start_paths, goal_paths, node):
                 print(f"TypeError combining paths: {e}")
                 print(f"f_path: {f_path}, b_path: {b_path}")  # 输出问题数据
 
+    # eg.
+    # local_paths = [
+    #     ("Germany", "Europe", "France"),
+    # ]
     return local_paths
 
 
+# Performs a BFS from "start" up to "hop" depth, returning all possible paths to each reachable node.
+# return: dict of {reachable_node: [paths]}
 def node_expand_with_paths(graph, start, hop):
-    queue = deque([(start, [start])])  # 存储节点和到该节点的路径
-    visited = {start: [start]}  # 记录到达每个节点的所有路径
+    queue = deque([(start, [start])])  # (current_node, path to node)
+    visited = {start: [start]}  # stores the path leading to each node
+
+    # eg. at the start:
+    # queue = deque([("m.02jx3", ["m.02jx3"])])  # Germany
+    # visited = {"m.02jx3": ["m.02jx3"]}
 
     while queue:
         current_node, current_path = queue.popleft()
-        if current_node not in graph:
+
+        if current_node not in graph:   # prune if not in graph
             print(f"Skipping non-existent node {current_node}")
             continue
+        
+        # ensures BFS does not exceed "hop" depth
         current_layer = len(current_path) - 1
         if current_layer < hop:  # 只扩展到给定的层数
             for neighbor in graph[current_node]:
+                # graph = {
+                #     "m.02jx3": {"m.0f8l9c": {}, "m.0g7qf": {}},  # Germany → France, Europe
+                # }
                 if neighbor in current_path:
                     continue  # 跳过已经在路径中的节点，防止回环
+
                 new_path = current_path + [neighbor]
                 if neighbor not in visited:
                     visited[neighbor] = []
+                    # The current implementation of the queue logic prevents multiple paths leading to the same node from being expanded.
+                    # 1. Mistake? Intended to explore all paths but didn't realize the logic prevents some paths from expanding.
+                    # 2. Optimization, might intend to prioritize on shortest paths.
                     queue.append((neighbor, new_path))
                 visited[neighbor].append(new_path)  # 记录到此节点的每条路径
 
+    # eg.
+    # visited = {
+    #     Germany: [Germany]
+    #     France: [[Germany, France], [Germany, Europe, France]]
+    #     Europe: [[Germany, Europe], [Germany, France, Europe]]
+    # }
     return visited
+
 def bfs_with_intersection_only(graph, entity_list, hop):
     # 使用多线程并行执行node_expand
     with ThreadPoolExecutor() as executor:
@@ -812,9 +894,11 @@ def create_subgraph_through_intersections(graph, entity_list, intersection, tota
     return complete_subgraph,reduce_entity_names
 
 
-
+# finds all paths between entities in the graph using a bidirectional BFS (bi-BFS) with intersection 
+# and then adds relationship information to those paths.
+# graph -> adj_list, total_entities -> entities to search from, hop -> current depth, if_using_all_r -> PoG or PoGE
 def find_all_paths_bibfs_itersection(graph, total_entities, hop, if_using_all_r):
-    all_paths = []
+    all_paths = []      # store all discovered paths
     # entity_list = sorted(total_entities, key=lambda x: len(graph.get(x, {})))
 
     raw_paths = bfs_with_intersection(graph, total_entities, hop)
@@ -847,6 +931,8 @@ def find_all_paths_bibfs_itersection_limit(graph, total_entities, hop, if_using_
 
 import difflib
 
+# Finds the best matching substring of an entity within a given CoT-line.
+# Returning: the best match (highest similarity score and starting position)
 def find_best_matching_substring(entity, cot_line):
     len_entity = len(entity)
     len_cot = len(cot_line)
@@ -858,29 +944,34 @@ def find_best_matching_substring(entity, cot_line):
     best_score = 0
     best_start = -1
 
-    for length in range(min_len, max_len + 1):
-        for start in range(len_cot - length + 1):
+    for length in range(min_len, max_len + 1):      # iterate over all string length
+        for start in range(len_cot - length + 1):   # sliding window over 
             substring = cot_line[start:start + length]
-            score = difflib.SequenceMatcher(None, entity, substring).ratio()
+            score = difflib.SequenceMatcher(None, entity, substring).ratio()    # compute similarity ratio
             if score > best_score:
                 best_score = score
                 best_start = start
 
     return best_score, best_start
 
+# Reorders topic entities based on their position in the (CoT) reasoning line.
+# Return: a list of entities in the correct order.
+# parameter "topic_entity_dict" is a list containing only entity names (list(str))
 def reorder_entities(cot_line, topic_entity_dict):
-    entity_positions = []
+    entity_positions = []   # stores a list of (position, entity)
 
     for entity in topic_entity_dict:
         score, position = find_best_matching_substring(entity, cot_line)
+
         # Assign a high position if no match is found
         if position != -1:
             entity_positions.append((position, entity))
         else:
-            entity_positions.append((float('inf'), entity))
+            entity_positions.append((float('inf'), entity)) # assign (inf, entity) if not found
 
     # Sort entities based on their positions in cot_line
     entity_positions.sort()
+
     sorted_entities = [entity for position, entity in entity_positions]
     return sorted_entities
 
@@ -928,7 +1019,7 @@ def bfs_with_intersection_inter(graph, entity_list, hop):
                 futures.append(executor.submit(process_node, start_entity_paths, target_entity_paths, node))
             
             # Collect results for this entity pair
-            combination_paths = []
+            combination_paths = [] 
             for future in as_completed(futures):
                 combination_paths.extend(future.result())
             combination_path_dict[(entity_list[i - 1], entity_list[i])] = combination_paths
@@ -938,11 +1029,22 @@ def bfs_with_intersection_inter(graph, entity_list, hop):
     print(entity_list)
     return total_paths
 
+
+# bi-BFS with intersection to find paths between multiple entities in the KG.
+# hop -> current max depth
 def bfs_with_intersection(graph, entity_list, hop):
+
     # Perform node expansion in parallel
     with ThreadPoolExecutor() as executor:
         futures = {executor.submit(node_expand_with_paths, graph, entity, hop): entity for entity in entity_list}
         paths_dict = {entity: future.result() for entity, future in zip(entity_list, as_completed(futures))}
+        # eg. paths from Germany
+        # {
+        #     "Germany": {
+        #         "France": [["Germany", "France"]],
+        #         "Europe": [["Germany", "Europe"], ["Germany", "France", "Europe"]]
+        #     },
+        # }
 
     if len(entity_list) == 1:
         paths = set()
@@ -952,25 +1054,46 @@ def bfs_with_intersection(graph, entity_list, hop):
                 if len(f_path) > 1:
                     paths.add(tuple(f_path))
         print("Only one entity, return all paths")
+
+        # eg. [["Germany", "France"], ["Germany", "Europe"], ["Germany", "France", "Europe"]]
         return list(paths)
     
+    # If multiple entities, find intersection between entities
+    # eg.
+    # paths_dict = {
+    #     "Germany": {
+    #         "Europe": [["Germany", "Europe"]],
+    #         "France": [["Germany", "France"], ["Germany", "Europe", "France"]]
+    #     },
+    #     "France": {
+    #         "Europe": [["France", "Europe"]],
+    #         "Germany": [["France", "Germany"], ["France", "Europe", "Germany"]]
+    #     }
+    # }
+
     combination_path_dict = {}
     total_paths = None
     
     for i in range(len(entity_list) - 1):
+        # for every two consecutive entities (2 consecutive entities in the CoT)
         start_entity = entity_list[i]
         target_entity = entity_list[i+1]
+
         start_entity_paths = paths_dict[start_entity]
         target_entity_paths = paths_dict[target_entity]
-        intersection = set(start_entity_paths.keys()) & set(target_entity_paths.keys())
+
+        intersection = set(start_entity_paths.keys()) & set(target_entity_paths.keys())     # eg. {"Europe"}
         if not intersection:
             return []
+        
         temp_paths = []
         for node in intersection:
-            temp_paths.extend(process_node(start_entity_paths, target_entity_paths, node))
+            temp_paths.extend(process_node(start_entity_paths, target_entity_paths, node))  # find combined paths and append
+
         if total_paths is None:
             total_paths = temp_paths
         else:
+            # For subsequent iterations (starting from the 2nd entity in CoT), merge total_paths (1st -> 2nds) and temp_paths (2nd -> third)
             combined_paths = []
             for path1 in total_paths:
                 for path2 in temp_paths:
@@ -979,7 +1102,7 @@ def bfs_with_intersection(graph, entity_list, hop):
             total_paths = combined_paths
             if not total_paths:
                 return []
-
+            
     return total_paths
 
 
@@ -1002,14 +1125,16 @@ def combine_all_paths(combination_path_dict, entity_list):
         total_paths = combined_paths
     return total_paths
 
-
+# Only selects one relation per connection instead of generating all possible variations.
 def add_relations_to_path1(graph, path):
     """Add relation information to a completed path."""
     full_path = []
     for i in range(len(path) - 1):
+        # for consecutive nodes
         node = path[i]
         next_node = path[i + 1]
         relations_dict = graph[node][next_node]
+
         relation_strings = []
         for direction, relations in relations_dict.items():
             direction_symbol = " ->" if direction == 'forward' else " <-"
@@ -1017,6 +1142,8 @@ def add_relations_to_path1(graph, path):
                 relations = list(relations) 
             for relation in relations:
                 relation_strings.append(f"{direction_symbol} {relation} {direction_symbol}")
+        
+        # Select the lexicographically smallest relation
         relation_strings.sort()
         top1 = relation_strings[0]
         relation_string = "{" + (top1) + "}"
@@ -1024,19 +1151,28 @@ def add_relations_to_path1(graph, path):
         # relation_string = "{" + ", ".join(relation_strings) + "}"
         full_path.append(node)
         full_path.append(relation_string)
+
     full_path.append(path[-1])
     return full_path
 
 def add_relations_to_path_with_all_R(graph, path):
     """Add all relation information to a completed path, generating different paths accordingly."""
     import itertools
+    # eg. path = [Germany, Europe, France]
 
     # Build a list of possible relations between each pair of nodes
     relations_list = []
     for i in range(len(path) - 1):
+        # extract relations between consecutive nodes
         node = path[i]
         next_node = path[i + 1]
-        relations_dict = graph[node][next_node]
+        relations_dict = graph[node][next_node]     
+        
+        # eg. graph["Germany"]["Europe"] = {                graph["Europe"]["France"] = {
+        #       "forward": {"located_in", "member_of"},         "forward": {"part_of", "connected_to"},
+        #       "backward": {}                                  "backward": {},
+        #     }                                             }
+
         relation_strings = []
         for direction, relations in relations_dict.items():
             direction_symbol = " ->" if direction == 'forward' else " <-"
@@ -1045,9 +1181,17 @@ def add_relations_to_path_with_all_R(graph, path):
             for relation in relations:
                 relation_strings.append(f"{direction_symbol} {relation} {direction_symbol}")
         relations_list.append(relation_strings)
+        # eg. relation_list = ["-> located_in ->", "<- part_of <-"]
 
     # Generate all combinations of relations
     relation_combinations = list(itertools.product(*relations_list))
+
+    # eg. relation_combinations = [
+    #     ("-> located_in ->", "-> part_of ->"),
+    #     ("-> located_in ->", "-> connected_to ->"),
+    #     ("-> member_of ->", "-> part_of ->"),
+    #     ("-> member_of ->", "-> connected_to ->")
+    # ]
 
     # For each combination, build the full path
     paths = []
@@ -1060,6 +1204,14 @@ def add_relations_to_path_with_all_R(graph, path):
             full_path.append(relation_string)
         full_path.append(path[-1])
         paths.append(full_path)
+
+    # eg. paths = [
+    #     ["Germany", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"],
+    #     ["Germany", "{-> located_in ->}", "Europe", "{-> connected_to ->}", "France"],
+    #     ["Germany", "{-> member_of ->}", "Europe", "{-> part_of ->}", "France"],
+    #     ["Germany", "{-> member_of ->}", "Europe", "{-> connected_to ->}", "France"]
+    # ]
+
     return paths
 
 
@@ -1109,36 +1261,66 @@ def merge_paths(graph, path_from_start, path_from_goal, is_direct_meet):
         return []  # Return an empty list or handle the error as appropriate for your application
 
 
-
+# Merges multiple paths that share the same relation sequence, by grouping nodes into sets where they differ.
 def merge_paths_by_relations(paths):
     from collections import defaultdict
     import itertools
 
+    # eg. paths = 
+    # paths = [
+    #     ["Germany", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"],
+    #     ["Berlin", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"],
+    #     ["Hamburg", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"]
+    # ]
+
     # Organize paths by their relation sequences
     paths_by_relations = defaultdict(list)
     for path in paths:
-        relations = tuple(path[i] for i in range(1, len(path), 2))
+        relations = tuple(path[i] for i in range(1, len(path), 2))  # relations = ("{-> located_in ->}", "{-> part_of ->}")
         paths_by_relations[relations].append(path)
+
+    # eg. path_by_relations = {
+    #     ("{-> located_in ->}", "{-> part_of ->}"): [
+    #         ["Germany", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"],
+    #         ["Berlin", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"],
+    #         ["Hamburg", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"]
+    #     ]
+    # }
 
     # Merge paths with the same relation sequences
     merged_paths = []
-    for relations, paths in paths_by_relations.items():
+    for relations, paths in paths_by_relations.items():     # Iterates through each group of paths that share a relation sequence.
         # This will hold the final merged path
         merged_path = []
+
         # We know all paths have the same length and relations, so we iterate through entities
         for i in range(0, len(paths[0]), 2):  # Only iterate over entity indices
+
             # Gather all entities at this position across all paths
-            entities = {path[i] for path in paths}
+            entities = {path[i] for path in paths}  # eg. for i = 0, entities = {Germany, Berlin, Hamburg}
             if len(entities) > 1:
                 merged_entity = "{" + ", ".join(sorted(set(entities))) + "}"
             else:
                 merged_entity = list(entities)[0]  # Just take the single entity
             merged_path.append(merged_entity)
+
             if i < len(paths[0]) - 1:  # Add the relation if it's not the last element
                 merged_path.append(paths[0][i+1])
 
         merged_paths.append(merged_path)
 
+        # eg. merged_path = [
+        #     "{Germany, Berlin, Hamburg}",
+        #     "{-> located_in ->}",
+        #     "Europe",
+        #     "{-> part_of ->}",
+        #     "France"
+        # ]
+
+    # eg. merged_paths = [
+    #     ["{Germany, Berlin, Hamburg}", "{-> located_in ->}", "Europe", "{-> part_of ->}", "France"],
+    #     ...
+    # ]
     return merged_paths
 
 
@@ -1291,22 +1473,36 @@ def extract_first_ten_words(text):
     
     # 将单词列表重新组合成字符串
     return ' '.join(first_ten_words)
+
+# converts raw paths (lists of entity IDs and relations) into human-readable natural language paths by replacing entity IDs with names.
+# eg. input paths = [
+#     ["m.123", "located_in", "m.456"],
+#     ["{m.789, m.321}", "connected_to", "m.654"]
+# ]
+# entity_id_to_name = {
+#     "m.123": "Paris",
+#     "m.456": "France",
+#     "m.789": "New York",
+#     "m.321": "Los Angeles",
+#     "m.654": "USA"
+# }
 def format_paths_to_natural_language_id_with_name(paths, entity_id_to_name, version =1):
     natural_language_paths = []
     print("version", version)
 
     for path in paths:
-        formatted_path = []
+        formatted_path = []     # store the formatted entities and relations.
         # print(type(path))    
 
+        # Even indices (i % 2 == 0) are entities, and odd indices (i % 2 == 1) are relations.
         for i, element in enumerate(path):
-            if i % 2 == 0:  # Assuming even indices are entities and odd are relations
+            if i % 2 == 0:  # Handling Sets of Entities
                 try:
                     # print(element)
                     # print(type(element))    
-                    if element.startswith('{'):
+                    if element.startswith('{'):     # multiple entities
 
-                        entities = element.strip('{}').split(', ')
+                        entities = element.strip('{}').split(', ')  # extracts individual entity IDs
                         formatted_entities = []
                         for e in entities[:20]:
                             if version == 2:
@@ -1342,6 +1538,10 @@ def format_paths_to_natural_language_id_with_name(paths, entity_id_to_name, vers
         natural_language = " - ".join(formatted_path)
         natural_language_paths.append(natural_language)
 
+    # eg. natural_language_paths = [
+    #     "Paris - located_in - France",
+    #     "New York, Los Angeles - connected_to - USA"
+    # ]
     return natural_language_paths
 
 
@@ -1379,16 +1579,16 @@ def merge_paths_by_relations_remove_usless(paths):
     return merged_paths
 
 
-
+# retrieves all 1-hop relationships for a given entity from the Knowledge Graph (KG) and formats them into natural language representations.
 def find_1_hop_relations_and_entities(entity, graph,entity_id_to_name, ifusing_all_R):
     # results = search_relations_and_entities_combined(entity)
 
+    # Iterate Over 1-Hop Neighboring Entities
     all_path = []
     for r_entity in graph[entity]:
         # continue
         if ifusing_all_R:
-
-
+            
             path = add_relations_to_path_with_all_R(graph, [entity, r_entity])   
             all_path.extend(path)
 
@@ -1409,43 +1609,66 @@ def find_1_hop_relations_and_entities(entity, graph,entity_id_to_name, ifusing_a
 
 
 
-
+# multi-threaded knowledge graph exploration
+#   1. Expanding from a set of initial topic entities.
+#   2. Fetching connected entities & relationships from the knowledge graph (KG).
+#   3. Building an adjacency list representation of the graph.
+#   4. Updating explored entities to avoid duplicate processing.
 def explore_graph_from_one_topic_entities(current_entities, graph, entity_names, exlored_entities,all_entities):
    
     # all_entities = set(entity_ids)
 
-
     storage_lock = Lock()  # 创建线程安全锁
-
-
 
     print(f"Exploring entities ...")
     start = time.time()
-    new_entities = set()
+    new_entities = set()    # store newly discovered entities
+    
+    # One thread for each entity, for single-entity questions, multi-threading will be needed for 2nd+ rounds.
+    with ThreadPoolExecutor(max_workers=80) as executor:    # create thread pool
 
-    with ThreadPoolExecutor(max_workers=80) as executor:
+        # Creates a dictionary where for all entities to process (to track which "future" associates which entity):
+        #   Keys -> Future objects (asynchronous tasks: run search_relations_and_entities_combined_1(entity)).
+        #   Values -> The corresponding entity being processed.
+        #   eg.
+        #   {
+        #       <Future at 0x1234567890 state=running>: "m.02jx3",  # Germany
+        #       <Future at 0x1234567891 state=running>: "m.03q5f",  # Harvard University
+        #       <Future at 0x1234567892 state=running>: "m.0f8l9c"   # France
+        #   }
         futures = {executor.submit(search_relations_and_entities_combined_1, entity): entity for entity in current_entities}
-        exlored_entities.update(current_entities)
-        for future in as_completed(futures):
-            results = future.result()
-            entity = futures[future]
-            for result in results:
+
+        exlored_entities.update(current_entities)   # mark all entities as processed
+
+        # process query results as they finish
+        for future in as_completed(futures):    # as_completed(futures) waits for queries to finish in any order.
+            results = future.result()   # get query result
+            entity = futures[future]    # retrieve corresponding entity of the finished "future"
+
+            for result in results:      # eg. a single result (one edge in KG) = { "relation": "shares_border_with", "connectedEntity": "m.0f8l9c", "connectedEntityName": "France", "direction": "tail" }
                 relation, connected_entity, connected_name, direction = result['relation'], result['connectedEntity'], result['connectedEntityName'], result['direction']
+
                 if connected_entity.startswith("m."):
-                    if connected_entity in exlored_entities:
+                    if connected_entity in exlored_entities:    # skip already explored entities
                         continue
-                    with storage_lock:
+
+                    with storage_lock:      # lock when modifying shared structures
                         # 更新或添加实体名称
                         entity_names[connected_entity] = connected_name
+
                         # 确保图中包含相关实体和关系
                         if entity not in graph:
                             graph[entity] = {}
+
                         if connected_entity not in graph:
                             graph[connected_entity] = {}
+
                         if connected_entity not in graph[entity]:
                             graph[entity][connected_entity] = {'forward': set(), 'backward': set()}
+
                         if entity not in graph[connected_entity]:
                             graph[connected_entity][entity] = {'forward': set(), 'backward': set()}
+
                         # 更新关系
                         if direction == "tail":
                             graph[entity][connected_entity]['forward'].add(relation)
@@ -1453,18 +1676,19 @@ def explore_graph_from_one_topic_entities(current_entities, graph, entity_names,
                         else:  # direction is "head"
                             graph[entity][connected_entity]['backward'].add(relation)
                             graph[connected_entity][entity]['forward'].add(relation)
+
                     new_entities.add(connected_entity)
 
-
-        new_entities.difference_update(exlored_entities)
-        all_entities.update(new_entities)
-        current_entities = new_entities
+        new_entities.difference_update(exlored_entities)    # remove explored entities from new_entities
+        all_entities.update(new_entities)                   # add new entities to the global entity set
+        current_entities = new_entities                     # set new entities as "current_entities" for next round
         # print ((all_entities))
         # print((exlored_entities))
         # print ((current_entities))
 
     # print("Entities are not fully connected or answer entity not found within the maximum allowed hops.")
     return (graph, all_entities, exlored_entities, current_entities, entity_names)
+
 # Ensure you have proper implementations for search_relations_and_entities_combined and are_entities_connected
 def extract_brace_contents(path):
     """
